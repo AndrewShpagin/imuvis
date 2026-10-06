@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.vscode/
+tmp*/
+*_fit_*.csv
+*_fit_*.json
+*_fit_*.png
+.pytest_cache/
+height.csv

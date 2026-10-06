@@ -1,0 +1,158 @@
+Build and maintain a Python tool for experimenting with IMU/vision position
+feedback in a drone flight log.
+
+Input
+
+- Read a semicolon-separated CSV. Each sample represents 0.05 seconds.
+- Required columns are vis_x, vis_y, mheight, and either acc.x/acc.y or
+  acc_x/acc_y.
+- If a positive G column exists, use its median as gravity. An explicit
+  --gravity value overrides it; otherwise use 9.80665 m/s^2.
+- Validate the selected window, finite numeric values, and positive height.
+
+Physical model and sign
+
+The downward-looking camera estimates horizontal position using height. The
+EKF down direction and terrain height may be imperfect. For a small coordinate
+correction DX at height H, use this NED convention:
+
+    acceleration correction = +DX * G / H
+
+A positive coordinate correction must produce a positive acceleration
+correction. Keep --acceleration-sign=-1 only as a diagnostic option. Warn when
+the maximum absolute total coordinate correction divided by height exceeds
+0.1, because the small-angle approximation then deserves inspection.
+
+Residual-feedback experiment
+
+Treat X and Y independently. For each requested initial vision scale s:
+
+1. Set the fixed scale reference:
+
+       scaled_vision = s * original_vision
+
+2. Iteration 0 starts with:
+
+       coordinate = scaled_vision
+       physical_acceleration = original_acceleration
+
+3. Fit initial position, initial velocity, and a constant acceleration bias by
+   least squares so that the double-integrated acceleration best matches the
+   current coordinate. Integrate using the 0.05-second interval and linear
+   interpolation between adjacent acceleration samples.
+
+4. Run four correction iterations by default. On every iteration calculate:
+
+       DX = gain * (integrated_position - coordinate)
+       coordinate += DX
+       physical_acceleration += DX * G / height
+
+   The default gain is 0.3.
+
+5. After updating both coordinate and physical acceleration, re-estimate
+   initial position, initial velocity, and constant acceleration bias against
+   the updated coordinate. Reintegrate the newly corrected acceleration. The
+   next iteration must use this updated coordinate, acceleration, bias, and
+   integration.
+
+6. Preserve every iteration for diagnostics, but select and export the
+   requested final iteration even when an earlier iteration has a smaller
+   error. Monitor coordinate second-difference RMS to show whether the
+   feedback coordinate becomes smoother.
+
+Scale criterion and metrics
+
+Use the fixed initial scaled vision, rather than the iteratively updated
+coordinate, as the scale-comparison reference:
+
+    per-axis RMSE =
+        sqrt(mean((integrated_position - scaled_vision)^2))
+
+    per-axis average distance =
+        mean(abs(integrated_position - scaled_vision))
+
+    average 2D distance =
+        mean(hypot(integrated_x - scaled_vision_x,
+                   integrated_y - scaled_vision_y))
+
+The scale producing the smallest distance is a candidate for the true-height
+scale. Keep fit_rmse_m as a separate internal metric between integration and
+the iteratively updated coordinate. Raw unscaled-vision metrics are diagnostic
+only. Warn if fixed-scaled-vision RMSE does not improve on every iteration.
+
+Interactive application
+
+- Running `py -3 imuviso.py` opens the UI.
+- Accept an optional CSV path and automatically use height.csv when present.
+- Support Browse, dropping a CSV onto imuviso_ui.cmd, and in-window dropping
+  when tkinterdnd2 is installed.
+- Provide live controls for Scale (%), Start tick, and Tick count.
+- Put a timeline slider above Scale to select Start tick in whole ticks. Keep
+  it synchronized with playback and Reset, limit it to valid window starts,
+  and pause playback when the user moves it.
+- Recalculate after edits without blocking the UI.
+- Put Play/Pause and Reset beside Start tick.
+- During playback, advance Start tick by one as soon as the preceding
+  calculation and drawing finish.
+- Reset pauses playback, restores the launch start tick, and clears accumulated
+  endpoint history.
+- The interactive preview must not write output files.
+
+The Position feedback tab shows only iteration 0 and iteration 4 for X and Y.
+The final row also overlays the iteration-0 re-biased integration. Show raw
+vision, fixed initial scaled vision, the final updated feedback coordinate,
+and the relevant integrated trajectories. Do not add an acceleration tab.
+
+Remove constant offset and constant speed only for display on this tab:
+
+- Detrend raw/original vision with its own least-squares affine line.
+- Detrend each scaled-vision/integration comparison pair with one shared affine
+  line fitted to the pair midpoint, so their point-by-point difference is
+  unchanged.
+- Display the updated feedback coordinate after removing the affine trend of
+  the iteration-0 coordinate, preserving its update relative to that start.
+- Do not alter arrays used by calculations, metrics, exports, or the realtime
+  endpoint tab.
+- Always place plot legends at the top left. Show the selected window's
+  average mheight in meters in the interactive plot headings and status.
+- Keep raw vision visibly identifiable with a dotted marker trace when it
+  exactly overlaps scaled vision at 100% scale. Never add an artificial value
+  offset to separate the curves.
+
+The Realtime endpoints tab stores only the last sample from each completed
+window for fixed initial scaled vision and final integration. Plot the
+accumulated endpoint values against CSV tick in absolute coordinates. Retain
+at most Tick count points. Replace a point when the same tick is recalculated.
+Clear history on Reset, CSV/scale/count changes, backward movement, or a
+forward tick jump greater than 10. Update this graph during playback. Show
+per-axis endpoint RMSE, average absolute difference, mean signed error, and
+the average 2D endpoint distance.
+
+Batch mode and exports
+
+The batch form is:
+
+    py -3 imuviso.py CSV START COUNT --no-show
+
+By default, run independent feedback experiments for scales 70% through 120%
+in 5% steps. Do not carry a correction from one scale into another. Export:
+
+- original NED vision coordinates, original acceleration, and mheight;
+- true_PERCENT_x/y: final updated feedback coordinate;
+- true_PERCENT_scaled_vision_x/y: fixed scale reference;
+- true_PERCENT_physical_acc_x/y: raw acceleration plus accumulated geometric
+  DX*G/H corrections;
+- true_PERCENT_acc_x/y: physical acceleration plus the final fitted constant
+  bias;
+- true_PERCENT_integrated_x/y: final re-integrated position.
+
+Retain the batch calibration stages for acceleration bias, vision scale, and
+optional tilt/height correction. After every scale or tilt update, rebuild the
+coordinate and physical acceleration, refit the bias, and reintegrate. Unknown
+tilt fitting remains disabled by default; allow supplied tilt values or the
+experimental --fit-tilt option.
+
+Skip CSV writing by default; enable both batch CSV exports only with
+--write-csv. Write JSON reports plus the calibration, first/final position, and
+batch acceleration figures. Keep report metric names explicit about whether
+their reference is fixed scaled vision, updated coordinate, or raw vision.
