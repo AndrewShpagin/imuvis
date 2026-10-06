@@ -128,6 +128,19 @@ forward tick jump greater than 10. Update this graph during playback. Show
 per-axis endpoint RMSE, average absolute difference, mean signed error, and
 the average 2D endpoint distance.
 
+The Realtime acceleration bias tab uses the same accumulated window history
+and endpoint tick. Plot the iteration-0 and requested-final fitted constant
+acceleration bias for X and Y in m/s^2. This is the constant bias added after
+the geometric DX*G/height correction; do not substitute corrected acceleration,
+the geometric correction, or a best-earlier-iteration bias. Show the latest
+initial value, final value, and their change, plus the retained final-bias mean
+and population standard deviation. Show the latest and retained-mean final
+X/Y bias magnitude in the figure heading. Apply exactly the same Tick count,
+same-tick replacement, Reset, setting-change, backward-movement, and jump
+rules as Realtime endpoints. Keep these values absolute and do not detrend.
+During playback, make clear that adjacent estimates are strongly correlated
+because their windows differ by only one sample.
+
 Batch mode and exports
 
 The batch form is:

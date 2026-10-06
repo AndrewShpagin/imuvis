@@ -72,6 +72,16 @@ selected window's average height (`mheight`) in meters.
   samples. The figure heading reports the average 2D endpoint distance
   `mean(sqrt(dx^2 + dy^2))` as a single scale criterion. This tab remains in
   absolute coordinates and does not apply the display detrending.
+- **Realtime acceleration bias** adds one whole-window constant-bias estimate
+  at the window endpoint tick. It shows the iteration-0 and final refitted bias
+  for X and Y, together with the latest change and the retained final-bias mean
+  and population standard deviation. Its heading shows the latest and mean
+  final X/Y bias magnitude. This is the constant bias fitted after applying
+  the geometric `DX*G/height` correction, rather than raw acceleration or the
+  geometric correction itself. It shares the endpoint tab's Tick count limit,
+  replacement, reset, setting-change, backward-movement, and jump rules.
+  During playback, adjacent estimates use strongly overlapping windows because
+  the start tick advances by one sample.
 
 These metrics always hold `scale * raw vision` fixed as their reference; they
 do not use the iteratively updated feedback coordinate. The scale with the

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import math
 import os
 from pathlib import Path
 import queue
@@ -67,6 +68,30 @@ class _EndpointPoint:
     integrated_x: float
     scaled_y: float
     integrated_y: float
+    initial_bias_x: float
+    final_bias_x: float
+    initial_bias_y: float
+    final_bias_y: float
+
+
+def _history_point_from_result(result: dict[str, Any]) -> _EndpointPoint:
+    """Extract synchronized endpoint and fitted-bias values from one window."""
+    axes = result["axes"]
+    return _EndpointPoint(
+        tick=int(result["start"]) + int(result["count"]) - 1,
+        scaled_x=float(axes["x"]["scaled_vision"][-1]),
+        integrated_x=float(
+            axes["x"]["states"][-1]["integrated_position"][-1]
+        ),
+        scaled_y=float(axes["y"]["scaled_vision"][-1]),
+        integrated_y=float(
+            axes["y"]["states"][-1]["integrated_position"][-1]
+        ),
+        initial_bias_x=float(axes["x"]["states"][0]["bias_m_s2"]),
+        final_bias_x=float(axes["x"]["states"][-1]["bias_m_s2"]),
+        initial_bias_y=float(axes["y"]["states"][0]["bias_m_s2"]),
+        final_bias_y=float(axes["y"]["states"][-1]["bias_m_s2"]),
+    )
 
 
 def _store_endpoint_point(
@@ -269,7 +294,7 @@ class ImuvisoUI:
         ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(3, 0))
         ttk.Label(
             controls,
-            text=("Realtime endpoints: one newest sample per completed window; "
+            text=("Realtime endpoints and bias: one estimate per completed window; "
                   "history clears on reset, incompatible settings, or a tick gap > 10."),
             foreground="#555555",
         ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(3, 0))
@@ -280,8 +305,10 @@ class ImuvisoUI:
 
         position_frame = ttk.Frame(notebook)
         comparison_frame = ttk.Frame(notebook)
+        bias_frame = ttk.Frame(notebook)
         notebook.add(position_frame, text="Position feedback")
         notebook.add(comparison_frame, text="Realtime endpoints")
+        notebook.add(bias_frame, text="Realtime acceleration bias")
 
         figure_height = min(18.0, max(7.0, 2.6 * self.rows))
         self.position_figure = Figure(figsize=(11, figure_height), dpi=100)
@@ -382,6 +409,41 @@ class ImuvisoUI:
             self.comparison_figure, master=comparison_frame
         )
         self.comparison_canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        self.bias_figure = Figure(figsize=(11, 6), dpi=100)
+        self._bias_suptitle = self.bias_figure.suptitle(
+            "Fitted constant acceleration bias: waiting for samples"
+        )
+        bias_grid = self.bias_figure.subplots(
+            1, 2, sharex=True, squeeze=False
+        )
+        self.bias_axes = bias_grid[0]
+        self.bias_lines: dict[str, dict[str, Any]] = {}
+        for column, axis_name in enumerate(("x", "y")):
+            ax = self.bias_axes[column]
+            initial, = ax.plot(
+                [], [], color="0.5", linewidth=1.1, linestyle="--",
+                marker=".", markersize=5, label="Iteration 0 fitted bias"
+            )
+            final, = ax.plot(
+                [], [], color="tab:red", linewidth=1.6, marker=".",
+                markersize=5, label=f"Iteration {self.iterations} fitted bias"
+            )
+            ax.axhline(0.0, color="0.75", linewidth=0.8, zorder=0)
+            ax.set_title(f"{axis_name.upper()}: waiting for bias samples")
+            ax.set_xlabel("Window endpoint CSV tick")
+            ax.set_ylabel("Fitted constant bias (m/s²)")
+            ax.grid(True, alpha=0.35)
+            ax.legend(loc="upper left")
+            self.bias_lines[axis_name] = {
+                "initial": initial,
+                "final": final,
+            }
+        self.bias_figure.tight_layout(rect=(0, 0, 1, 0.93))
+        self.bias_canvas = FigureCanvasTkAgg(
+            self.bias_figure, master=bias_frame
+        )
+        self.bias_canvas.get_tk_widget().pack(fill="both", expand=True)
 
         status_frame = ttk.Frame(self.root, padding=(10, 5, 10, 8))
         status_frame.grid(row=2, column=0, sticky="ew")
@@ -508,21 +570,34 @@ class ImuvisoUI:
             self.play_button.configure(text="Pause" if playing else "Play")
 
     def _clear_endpoint_history(self, *, redraw: bool = True) -> None:
+        """Clear the shared realtime endpoint and fitted-bias history."""
         self._endpoint_history.clear()
         self._endpoint_context = None
-        if not hasattr(self, "comparison_lines"):
-            return
-        for axis_name in ("x", "y"):
-            for line in self.comparison_lines[axis_name].values():
-                line.set_data([], [])
-            self.comparison_axes[0 if axis_name == "x" else 1].set_title(
-                f"{axis_name.upper()}: waiting for endpoint samples"
+        if hasattr(self, "comparison_lines"):
+            for axis_name in ("x", "y"):
+                for line in self.comparison_lines[axis_name].values():
+                    line.set_data([], [])
+                self.comparison_axes[0 if axis_name == "x" else 1].set_title(
+                    f"{axis_name.upper()}: waiting for endpoint samples"
+                )
+            self._comparison_suptitle.set_text(
+                "Mean 2D integration-to-initial-scaled-vision distance: "
+                "waiting for samples"
             )
-        self._comparison_suptitle.set_text(
-            "Mean 2D integration-to-initial-scaled-vision distance: waiting for samples"
-        )
-        if redraw:
-            self.comparison_canvas.draw_idle()
+            if redraw:
+                self.comparison_canvas.draw_idle()
+        if hasattr(self, "bias_lines"):
+            for column, axis_name in enumerate(("x", "y")):
+                for line in self.bias_lines[axis_name].values():
+                    line.set_data([], [])
+                self.bias_axes[column].set_title(
+                    f"{axis_name.upper()}: waiting for bias samples"
+                )
+            self._bias_suptitle.set_text(
+                "Fitted constant acceleration bias: waiting for samples"
+            )
+            if redraw:
+                self.bias_canvas.draw_idle()
 
     def _update_endpoint_history(self, result: dict[str, Any]) -> None:
         count = int(result["count"])
@@ -537,17 +612,7 @@ class ImuvisoUI:
             self._endpoint_context = context
 
         axes = result["axes"]
-        point = _EndpointPoint(
-            tick=endpoint_tick,
-            scaled_x=float(axes["x"]["scaled_vision"][-1]),
-            integrated_x=float(
-                axes["x"]["states"][-1]["integrated_position"][-1]
-            ),
-            scaled_y=float(axes["y"]["scaled_vision"][-1]),
-            integrated_y=float(
-                axes["y"]["states"][-1]["integrated_position"][-1]
-            ),
-        )
+        point = _history_point_from_result(result)
 
         _store_endpoint_point(self._endpoint_history, point, count)
 
@@ -595,6 +660,50 @@ class ImuvisoUI:
             f'initial-scaled-vision distance {mean_2d_distance:.4g} m '
             f'(lower is closer)\n'
             f'Window average height: {result["average_height_m"]:.3f} m'
+        )
+
+        for column, axis_name in enumerate(("x", "y")):
+            initial_biases = [
+                getattr(item, f"initial_bias_{axis_name}")
+                for item in self._endpoint_history
+            ]
+            final_biases = [
+                getattr(item, f"final_bias_{axis_name}")
+                for item in self._endpoint_history
+            ]
+            lines = self.bias_lines[axis_name]
+            lines["initial"].set_data(ticks, initial_biases)
+            lines["final"].set_data(ticks, final_biases)
+            mean_final = sum(final_biases) / len(final_biases)
+            final_std = math.sqrt(sum(
+                (value - mean_final) ** 2 for value in final_biases
+            ) / len(final_biases))
+            latest_change = final_biases[-1] - initial_biases[-1]
+            final_iteration = axes[axis_name]["states"][-1]["iteration"]
+            self.bias_axes[column].set_title(
+                f"{axis_name.upper()}: fitted constant acceleration bias\n"
+                f"{len(ticks)}/{count} windows; latest tick {endpoint_tick}\n"
+                f"latest iter 0 {initial_biases[-1]:+.4g}; iter "
+                f"{final_iteration} {final_biases[-1]:+.4g}; "
+                f"change {latest_change:+.4g} m/s²\n"
+                f"final history mean {mean_final:+.4g}; "
+                f"σ {final_std:.3g} m/s²",
+                fontsize="medium",
+            )
+
+        latest_bias_magnitude = math.hypot(
+            point.final_bias_x, point.final_bias_y
+        )
+        mean_bias_magnitude = sum(
+            math.hypot(item.final_bias_x, item.final_bias_y)
+            for item in self._endpoint_history
+        ) / len(self._endpoint_history)
+        self._bias_suptitle.set_text(
+            f'Scale {result["scale_percent"]:g}%: each point is one whole-'
+            f'window bias estimate after geometric DX*G/H correction\n'
+            f'Final bias magnitude: latest {latest_bias_magnitude:.4g} m/s²; '
+            f'history mean {mean_bias_magnitude:.4g} m/s²; '
+            f'average height {result["average_height_m"]:.3f} m'
         )
 
     def _advance_playback(self, result: dict[str, Any]) -> None:
@@ -816,8 +925,12 @@ class ImuvisoUI:
         for ax in self.comparison_axes:
             ax.relim()
             ax.autoscale_view()
+        for ax in self.bias_axes:
+            ax.relim()
+            ax.autoscale_view()
         self.position_canvas.draw_idle()
         self.comparison_canvas.draw_idle()
+        self.bias_canvas.draw_idle()
 
         seconds = float(result.get("compute_seconds", 0.0))
         summaries = [result["axes"][axis]["summary"] for axis in ("x", "y")]
