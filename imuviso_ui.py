@@ -132,6 +132,7 @@ class ImuvisoUI:
         self.gain = gain
         self.iterations = iterations
         self.rows = 2
+        self.show_all_iterations_var = tk.BooleanVar(value=False)
         self.acceleration_sign = acceleration_sign
         self._dnd_files = dnd_files
         self._closing = False
@@ -149,6 +150,7 @@ class ImuvisoUI:
         self.path_var = tk.StringVar()
         self.scale_var = tk.DoubleVar(value=initial_scale)
         self.start_var = tk.StringVar(value=str(initial_start))
+        self.step_var = tk.StringVar(value="1")
         self.timeline_var = tk.DoubleVar(value=initial_start)
         self.count_var = tk.StringVar(value=str(initial_count))
         self.status_var = tk.StringVar(value="Choose a CSV to begin.")
@@ -233,6 +235,7 @@ class ImuvisoUI:
         self.scale_spinbox.grid(row=0, column=1, padx=(6, 8))
         self.scale_slider = tk.Scale(
             parameters,
+            length=120,
             from_=10.0,
             to=200.0,
             variable=self.scale_var,
@@ -254,15 +257,22 @@ class ImuvisoUI:
         )
         self.start_spinbox.grid(row=0, column=4, padx=(6, 18))
 
+        ttk.Label(parameters, text="Step").grid(row=0, column=5, sticky="e")
+        self.step_spinbox = ttk.Spinbox(
+            parameters, from_=1, to=100_000_000, increment=1,
+            textvariable=self.step_var, width=6,
+        )
+        self.step_spinbox.grid(row=0, column=6, padx=(6, 12))
+
         self.play_button = ttk.Button(
             parameters, text="Play", command=self.toggle_playback
         )
-        self.play_button.grid(row=0, column=5, padx=(0, 6))
+        self.play_button.grid(row=0, column=7, padx=(0, 6))
         ttk.Button(parameters, text="Reset", command=self.reset_playback).grid(
-            row=0, column=6, padx=(0, 18)
+            row=0, column=8, padx=(0, 18)
         )
 
-        ttk.Label(parameters, text="Tick count").grid(row=0, column=7, sticky="e")
+        ttk.Label(parameters, text="Tick count").grid(row=0, column=9, sticky="e")
         self.count_spinbox = ttk.Spinbox(
             parameters,
             from_=6,
@@ -271,9 +281,9 @@ class ImuvisoUI:
             textvariable=self.count_var,
             width=10,
         )
-        self.count_spinbox.grid(row=0, column=8, padx=(6, 8))
+        self.count_spinbox.grid(row=0, column=10, padx=(6, 8))
         ttk.Button(parameters, text="Refresh", command=self.request_preview_now).grid(
-            row=0, column=9
+            row=0, column=11
         )
 
         drop_text = (
@@ -298,20 +308,16 @@ class ImuvisoUI:
                   "history clears on reset, incompatible settings, or a tick gap > 10."),
             foreground="#555555",
         ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(3, 0))
+        ttk.Checkbutton(
+            controls, text="Show all iterations", variable=self.show_all_iterations_var,
+            command=self._toggle_iterations,
+        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
-    def _build_plots(self) -> None:
-        notebook = ttk.Notebook(self.root)
-        notebook.grid(row=1, column=0, sticky="nsew", padx=10)
 
-        position_frame = ttk.Frame(notebook)
-        comparison_frame = ttk.Frame(notebook)
-        bias_frame = ttk.Frame(notebook)
-        notebook.add(position_frame, text="Position feedback")
-        notebook.add(comparison_frame, text="Realtime endpoints")
-        notebook.add(bias_frame, text="Realtime acceleration bias")
-
+    def _build_position_axes(self) -> None:
         figure_height = min(18.0, max(7.0, 2.6 * self.rows))
-        self.position_figure = Figure(figsize=(11, figure_height), dpi=100)
+        self.position_figure.clear()
+        self.position_figure.set_size_inches(11, figure_height)
         self._position_suptitle = self.position_figure.suptitle(
             "Position detail: offset and constant speed removed for display only"
         )
@@ -320,10 +326,10 @@ class ImuvisoUI:
         )
         self.position_lines: dict[tuple[int, str], dict[str, Any]] = {}
         for row in range(self.rows):
-            iteration = 0 if row == 0 else self.iterations
+            iteration = row if self.show_all_iterations_var.get() else (0 if row == 0 else self.iterations)
             integration_label = (
                 "Initial rebiased acceleration integration"
-                if row == 0 else "Final rebiased acceleration integration"
+                if row == 0 else f"Rebiased acceleration integration, iteration {iteration}"
             )
             for column, axis_name in enumerate(("x", "y")):
                 ax = self.position_axes[row][column]
@@ -337,7 +343,7 @@ class ImuvisoUI:
                 if row > 0:
                     coordinate, = ax.plot(
                         [], [], color="tab:blue", linewidth=1,
-                        label="Final updated feedback coordinate"
+                        label=f"Updated feedback coordinate, iteration {iteration}"
                     )
                 scaled, = ax.plot(
                     [], [], color="tab:green", linewidth=1.2,
@@ -371,8 +377,45 @@ class ImuvisoUI:
         for ax in self.position_axes[-1]:
             ax.set_xlabel("Time from window start (s)")
         self.position_figure.tight_layout(rect=(0, 0, 1, 0.90))
+
+    def _toggle_iterations(self) -> None:
+        self.rows = self.iterations + 1 if self.show_all_iterations_var.get() else 2
+        self._build_position_axes()
+        self._resize_position_view()
+        self.position_canvas.draw_idle()
+        self.request_preview_now()
+
+    def _resize_position_view(self, event: Any = None) -> None:
+        width = max(1, self.position_scroll.winfo_width())
+        height = max(1, self.position_scroll.winfo_height())
+        if self.show_all_iterations_var.get():
+            height = max(height, self.rows * 360)
+        self.position_scroll.itemconfigure(self._position_window, width=width, height=height)
+        self.position_scroll.configure(scrollregion=(0, 0, width, height))
+
+    def _build_plots(self) -> None:
+        notebook = ttk.Notebook(self.root)
+        notebook.grid(row=1, column=0, sticky="nsew", padx=10)
+
+        position_frame = ttk.Frame(notebook)
+        comparison_frame = ttk.Frame(notebook)
+        bias_frame = ttk.Frame(notebook)
+        notebook.add(position_frame, text="Position feedback")
+        notebook.add(comparison_frame, text="Realtime endpoints")
+        notebook.add(bias_frame, text="Realtime acceleration bias")
+
+        self.position_figure = Figure(figsize=(11, 7), dpi=100)
+        self._build_position_axes()
+        self.position_scroll = tk.Canvas(position_frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(position_frame, orient="vertical", command=self.position_scroll.yview)
+        scrollbar.pack(side="right", fill="y")
+        self.position_scroll.pack(side="left", fill="both", expand=True)
+        self.position_scroll.configure(yscrollcommand=scrollbar.set)
+        position_content = ttk.Frame(self.position_scroll)
+        self._position_window = self.position_scroll.create_window(0, 0, window=position_content, anchor="nw")
+        self.position_scroll.bind("<Configure>", self._resize_position_view)
         self.position_canvas = FigureCanvasTkAgg(
-            self.position_figure, master=position_frame
+            self.position_figure, master=position_content
         )
         self.position_canvas.get_tk_widget().pack(fill="both", expand=True)
 
@@ -546,9 +589,11 @@ class ImuvisoUI:
         return "break"
 
     def toggle_playback(self) -> None:
-        """Start or pause one-tick-at-a-time playback."""
+        """Start or pause playback using the selected tick step."""
         if self._playing:
             self._set_playing(False)
+            return
+        if self._playback_step() is None:
             return
         self._set_playing(True)
         self.request_preview_now()
@@ -706,9 +751,23 @@ class ImuvisoUI:
             f'average height {result["average_height_m"]:.3f} m'
         )
 
+    def _playback_step(self) -> int | None:
+        try:
+            step = int(self.step_var.get())
+            if step < 1:
+                raise ValueError
+        except (ValueError, tk.TclError):
+            self._set_playing(False)
+            self._set_status("Step must be a positive whole number of ticks.", error=True)
+            return None
+        return step
+
     def _advance_playback(self, result: dict[str, Any]) -> None:
         """Queue the next start tick only after the current result is drawn."""
         if not self._playing or self._closing:
+            return
+        step = self._playback_step()
+        if step is None:
             return
         start = int(result["start"])
         count = int(result["count"])
@@ -722,7 +781,7 @@ class ImuvisoUI:
 
         self._suspend_changes = True
         try:
-            self.start_var.set(str(start + 1))
+            self.start_var.set(str(min(start + step, last_full_window_start)))
         finally:
             self._suspend_changes = False
         self.request_preview_now()
@@ -854,7 +913,7 @@ class ImuvisoUI:
             coordinate_display_trend = least_squares_affine_trend(
                 t, states[0]["coordinate"]
             )
-            displayed_states = (states[0], states[-1])
+            displayed_states = states if self.show_all_iterations_var.get() else (states[0], states[-1])
             for row, state in enumerate(displayed_states):
                 position_ax = self.position_axes[row][column]
                 position = self.position_lines[(row, axis_name)]

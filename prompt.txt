@@ -92,13 +92,18 @@ Interactive application
   and pause playback when the user moves it.
 - Recalculate after edits without blocking the UI.
 - Put Play/Pause and Reset beside Start tick.
-- During playback, advance Start tick by one as soon as the preceding
+- Put a positive integer Step control immediately right of Start tick, default
+  1, and shorten the Scale slider to make room. Allow changes during playback.
+- During playback, advance Start tick by Step as soon as the preceding
   calculation and drawing finish.
+- Clamp the final playback step to the last full window start.
 - Reset pauses playback, restores the launch start tick, and clears accumulated
   endpoint history.
 - The interactive preview must not write output files.
 
-The Position feedback tab shows only iteration 0 and iteration 4 for X and Y.
+The Position feedback tab defaults to iteration 0 and iteration 4 for X and Y.
+A Show all iterations checkbox displays every iteration in separate X/Y rows
+with a vertical scrollbar. Keep the default first/final view when unchecked.
 The final row also overlays the iteration-0 re-biased integration. Show raw
 vision, fixed initial scaled vision, the final updated feedback coordinate,
 and the relevant integrated trajectories. Do not add an acceleration tab.

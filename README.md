@@ -39,13 +39,19 @@ selected window's average height (`mheight`) in meters.
   stays synchronized with Start tick during playback and Reset, and stops at
   the last start tick that fits the selected window. Dragging pauses playback.
 - **Start tick** selects the first CSV data row.
-- **Play/Pause** advances the start tick by one after each preview finishes;
+- **Step** beside Start tick sets the playback increment in ticks (default 1).
+  Increase it to move through the log faster. It can be changed during playback.
+  Steps greater than 10 clear endpoint history under the existing jump rule.
+- **Play/Pause** advances the start tick by Step after each preview finishes;
   playback therefore runs as fast as calculation and drawing allow.
 - **Reset** pauses playback and returns to the start tick used when the window
   opened (zero by default).
 - **Tick count** changes the window length.
-- **Position feedback** shows only iteration 0 and the configured final
-  iteration (iteration 4 by default). Each row compares the re-integrated
+- **Position feedback** shows iteration 0 and the configured final
+  iteration by default. Enable **Show all iterations** to inspect every
+  intermediate iteration for X and Y; scroll vertically to see all rows.
+  Each row retains its own error, bias, roughness, and correction metrics.
+  The final iteration is iteration 4 by default. Each row compares the re-integrated
   trajectory with the fixed initial scaled vision, defined as
   `scale * original_vision`. It shows scaled-vision RMSE
   `sqrt(mean((integration - scaled_vision)^2))` and ordinary average distance
